@@ -17,15 +17,15 @@ import math
 
 from collections import namedtuple
 
-from mamba_ssm.modules.mamba_simple import Mamba
-from mamba_ssm.utils.generation import GenerationMixin
-from mamba_ssm.utils.hf import load_config_hf, load_state_dict_hf
+from mamba.mamba_ssm.modules.mamba_simple import Mamba
+from mamba.mamba_ssm.utils.generation import GenerationMixin
+from mamba.mamba_ssm.utils.hf import load_config_hf, load_state_dict_hf
 
 from rope import *
 import random
 
 try:
-    from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
+    from mamba.mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
@@ -35,9 +35,10 @@ __all__ = [
     'vim_tiny_patch16_384', 'vim_small_patch16_384', 'vim_base_patch16_384',
 ]
 
+
 class Block(nn.Module):
     def __init__(
-        self, dim, mixer_cls, norm_cls=nn.LayerNorm, fused_add_norm=False, residual_in_fp32=False,drop_path=0.,
+        self, dim, mixer_cls, norm_cls=nn.LayerNorm, fused_add_norm=False, residual_in_fp32=False, drop_path=0.,
     ):
         """
         Simple block wrapping a mixer class with LayerNorm/RMSNorm and residual connection"
@@ -56,7 +57,8 @@ class Block(nn.Module):
         self.fused_add_norm = fused_add_norm
         self.mixer = mixer_cls(dim)
         self.norm = norm_cls(dim)
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.drop_path = DropPath(
+            drop_path) if drop_path > 0. else nn.Identity()
         if self.fused_add_norm:
             assert RMSNorm is not None, "RMSNorm import fails"
             assert isinstance(
@@ -77,12 +79,14 @@ class Block(nn.Module):
                 residual = hidden_states
             else:
                 residual = residual + self.drop_path(hidden_states)
-            
-            hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))
+
+            hidden_states = self.norm(
+                residual.to(dtype=self.norm.weight.dtype))
             if self.residual_in_fp32:
                 residual = residual.to(torch.float32)
         else:
-            fused_add_norm_fn = rms_norm_fn if isinstance(self.norm, RMSNorm) else layer_norm_fn
+            fused_add_norm_fn = rms_norm_fn if isinstance(
+                self.norm, RMSNorm) else layer_norm_fn
             if residual is None:
                 hidden_states, residual = fused_add_norm_fn(
                     hidden_states,
@@ -102,8 +106,9 @@ class Block(nn.Module):
                     prenorm=True,
                     residual_in_fp32=self.residual_in_fp32,
                     eps=self.norm.eps,
-                )    
-        hidden_states = self.mixer(hidden_states, inference_params=inference_params)
+                )
+        hidden_states = self.mixer(
+            hidden_states, inference_params=inference_params)
         return hidden_states, residual
 
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
@@ -126,7 +131,8 @@ def create_block(
     if ssm_cfg is None:
         ssm_cfg = {}
     factory_kwargs = {"device": device, "dtype": dtype}
-    mixer_cls = partial(Mamba, layer_idx=layer_idx, bimamba_type=bimamba_type, **ssm_cfg, **factory_kwargs)
+    mixer_cls = partial(Mamba, layer_idx=layer_idx,
+                        bimamba_type=bimamba_type, **ssm_cfg, **factory_kwargs)
     norm_cls = partial(
         nn.LayerNorm if not rms_norm else RMSNorm, eps=norm_epsilon, **factory_kwargs
     )
@@ -184,19 +190,20 @@ def segm_init_weights(m):
         nn.init.constant_(m.bias, 0)
         nn.init.constant_(m.weight, 1.0)
 
+
 class VisionMamba(nn.Module):
-    def __init__(self, 
-                 img_size=224, 
-                 patch_size=16, 
-                 depth=24, 
-                 embed_dim=192, 
-                 channels=3, 
+    def __init__(self,
+                 img_size=224,
+                 patch_size=16,
+                 depth=24,
+                 embed_dim=192,
+                 channels=3,
                  num_classes=1000,
-                 ssm_cfg=None, 
+                 ssm_cfg=None,
                  drop_rate=0.,
                  drop_path_rate=0.1,
-                 norm_epsilon: float = 1e-5, 
-                 rms_norm: bool = False, 
+                 norm_epsilon: float = 1e-5,
+                 rms_norm: bool = False,
                  initializer_cfg=None,
                  fused_add_norm=False,
                  residual_in_fp32=False,
@@ -213,7 +220,7 @@ class VisionMamba(nn.Module):
                  **kwargs):
         factory_kwargs = {"device": device, "dtype": dtype}
         # add factory_kwargs into kwargs
-        kwargs.update(factory_kwargs) 
+        kwargs.update(factory_kwargs)
         super().__init__()
         self.residual_in_fp32 = residual_in_fp32
         self.fused_add_norm = fused_add_norm
@@ -226,7 +233,8 @@ class VisionMamba(nn.Module):
 
         # pretrain parameters
         self.num_classes = num_classes
-        self.d_model = self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
+        # num_features for consistency with other models
+        self.d_model = self.num_features = self.embed_dim = embed_dim
 
         self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, in_chans=channels, embed_dim=embed_dim)
@@ -236,7 +244,8 @@ class VisionMamba(nn.Module):
             self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
 
         if if_abs_pos_embed:
-            self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + self.num_tokens, self.embed_dim))
+            self.pos_embed = nn.Parameter(torch.zeros(
+                1, num_patches + self.num_tokens, self.embed_dim))
             self.pos_drop = nn.Dropout(p=drop_rate)
 
         if if_rope:
@@ -247,15 +256,17 @@ class VisionMamba(nn.Module):
                 pt_seq_len=pt_hw_seq_len,
                 ft_seq_len=hw_seq_len
             )
-        self.head = nn.Linear(self.num_features, num_classes) if num_classes > 0 else nn.Identity()
-
+        self.head = nn.Linear(
+            self.num_features, num_classes) if num_classes > 0 else nn.Identity()
 
         # TODO: release this comment
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
+        # stochastic depth decay rule
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
         # import ipdb;ipdb.set_trace()
         inter_dpr = [0.0] + dpr
-        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
-                # transformer blocks
+        self.drop_path = DropPath(
+            drop_path_rate) if drop_path_rate > 0. else nn.Identity()
+        # transformer blocks
         self.layers = nn.ModuleList(
             [
                 create_block(
@@ -273,7 +284,7 @@ class VisionMamba(nn.Module):
                 for i in range(depth)
             ]
         )
-        
+
         # output head
         self.norm_f = (nn.LayerNorm if not rms_norm else RMSNorm)(
             embed_dim, eps=norm_epsilon, **factory_kwargs
@@ -296,10 +307,10 @@ class VisionMamba(nn.Module):
             )
         )
 
-
     def allocate_inference_cache(self, batch_size, max_seqlen, dtype=None, **kwargs):
         return {
-            i: layer.allocate_inference_cache(batch_size, max_seqlen, dtype=dtype, **kwargs)
+            i: layer.allocate_inference_cache(
+                batch_size, max_seqlen, dtype=dtype, **kwargs)
             for i, layer in enumerate(self.layers)
         }
 
@@ -317,13 +328,13 @@ class VisionMamba(nn.Module):
         B = x.shape[0]
         x = self.patch_embed(x)
         if self.if_cls_token:
-            cls_token = self.cls_token.expand(x.shape[0], -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
+            # stole cls_tokens impl from Phil Wang, thanks
+            cls_token = self.cls_token.expand(x.shape[0], -1, -1)
             x = torch.cat((cls_token, x), dim=1)
 
         if self.if_abs_pos_embed:
             x = x + self.pos_embed
             x = self.pos_drop(x)
-
 
         # mamba impl
         residual = None
@@ -344,10 +355,12 @@ class VisionMamba(nn.Module):
                 residual = hidden_states
             else:
                 residual = residual + self.drop_path(hidden_states)
-            hidden_states = self.norm_f(residual.to(dtype=self.norm_f.weight.dtype))
+            hidden_states = self.norm_f(
+                residual.to(dtype=self.norm_f.weight.dtype))
         else:
             # Set prenorm=False here since we don't need the residual
-            fused_add_norm_fn = rms_norm_fn if isinstance(self.norm_f, RMSNorm) else layer_norm_fn
+            fused_add_norm_fn = rms_norm_fn if isinstance(
+                self.norm_f, RMSNorm) else layer_norm_fn
             hidden_states = fused_add_norm_fn(
                 self.drop_path(hidden_states),
                 self.norm_f.weight,
@@ -463,4 +476,3 @@ def vim_base_patch16_224_bimambav2_final_pool_mean_abs_pos_embed_rope_also_resid
         )
         model.load_state_dict(checkpoint["model"])
     return model
-
